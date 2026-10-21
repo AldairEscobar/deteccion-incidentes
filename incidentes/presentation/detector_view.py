@@ -53,7 +53,7 @@ class DetectorView:
         # Banner de alarma: oculto hasta que la IA confirma un incidente.
         self.lbl_alert = tk.Label(
             root, text="", font=("Arial", 12, "bold"),
-            bg="SystemButtonFace", fg="white",
+            bg="SystemButtonFace", fg="white", wraplength=820, justify=tk.CENTER,
         )
         self.lbl_alert.pack(pady=2, fill=tk.X, padx=20)
 
@@ -65,7 +65,7 @@ class DetectorView:
         # Respuesta de la central ("ayuda en camino ...").
         self.lbl_central = tk.Label(
             root, text="", font=("Arial", 12, "bold"),
-            bg="SystemButtonFace", fg="white",
+            bg="SystemButtonFace", fg="white", wraplength=820, justify=tk.CENTER,
         )
         self.lbl_central.pack(pady=2, fill=tk.X, padx=20)
 

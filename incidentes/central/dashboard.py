@@ -116,17 +116,25 @@ class DashboardWindow(QMainWindow):
         root.addLayout(body, stretch=1)
 
         left = QVBoxLayout()
-        body.addLayout(left, stretch=2)
+        body.addLayout(left, stretch=1)
         left.addWidget(QLabel("Alertas recibidas"))
 
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
-            ["Ticket", "Cliente", "Tipo", "Descripción", "Dirección", "Hora"]
+            ["Ticket", "Cliente", "Tipo", "Descripción", "Hora"]
         )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)  # Descripción
+        header.setStyleSheet(
+            "QHeaderView::section{background:#1e1e1e;color:#39ff14;"
+            "padding:5px;border:0;}"
+        )
+        self.table.verticalHeader().setVisible(False)
         self.table.setStyleSheet(
-            "QTableWidget{background:#0d1117;color:#e6e6e6;gridline-color:#30363d;}"
-            "QHeaderView::section{background:#1e1e1e;color:#39ff14;}"
+            "QTableWidget{background:#0d1117;color:#e6e6e6;"
+            "gridline-color:#30363d;border:1px solid #30363d;}"
+            "QTableWidget::item{padding:4px;}"
         )
         left.addWidget(self.table, stretch=2)
 
@@ -141,7 +149,7 @@ class DashboardWindow(QMainWindow):
         left.addWidget(self.console, stretch=2)
 
         right = QVBoxLayout()
-        body.addLayout(right, stretch=3)
+        body.addLayout(right, stretch=1)
 
         self.lbl_clients = QLabel("Clientes conectados: 0")
         right.addWidget(self.lbl_clients)
@@ -150,7 +158,10 @@ class DashboardWindow(QMainWindow):
         self.client_list.setStyleSheet(
             "QListWidget{background:#11111b;color:#89b4fa;"
             "font-family:Consolas,monospace;border:1px solid #313244;}"
+            "QListWidget::item{background:#11111b;color:#89b4fa;padding:3px;}"
+            "QListWidget::item:selected{background:#313244;color:#cdd6f4;}"
         )
+        self.client_list.viewport().setStyleSheet("background:#11111b;")
         self.client_list.setMaximumHeight(160)
         right.addWidget(self.client_list)
 
@@ -256,30 +267,30 @@ class DashboardWindow(QMainWindow):
     def _append_alert(self, alert: dict) -> None:
         body = alert["alert"]
         location = body.get("location", {})
+        address = location.get("address", "") or "sin dirección"
+        description = body.get("reason") or body.get("label", "")
         row = self.table.rowCount()
         self.table.insertRow(row)
         values = [
             alert["ticket"],
             body["client_id"],
             body["type"],
-            body.get("reason") or body.get("label", ""),
-            location.get("address", "") or "sin dirección",
+            description,
             alert["received_at"][11:19],
         ]
         for column, value in enumerate(values):
-            self.table.setItem(row, column, QTableWidgetItem(str(value)))
+            item = QTableWidgetItem(str(value))
+            if column == 3:
+                item.setToolTip(f"{description}\n{address}")
+            self.table.setItem(row, column, item)
         self.table.scrollToBottom()
 
         self.append_log(
             f"⚠️ ALERTA {alert['ticket']} [{alert['priority']}] "
             f"{body['type']} - {body['client_id']}"
         )
-        self.append_log(
-            f"    descripción: {body.get('reason') or body.get('label', '')}"
-        )
-        self.append_log(
-            f"    dirección:   {location.get('address', '') or 'sin dirección'}"
-        )
+        self.append_log(f"    descripción: {description}")
+        self.append_log(f"    dirección:   {address}")
         self.append_log(
             f"    ► AYUDA EN CAMINO: {', '.join(alert['units'])} "
             f"(ETA ~{alert['eta_min']} min)"

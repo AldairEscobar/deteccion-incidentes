@@ -1,4 +1,25 @@
-# Detección de incidentes violentos con verificación por IA
+# 🚨 Detección de incidentes violentos con verificación por IA
+
+<p align="center">
+  <strong>YOLO propone. La IA local confirma. La central despacha.</strong><br>
+  Sistema cliente-servidor de videovigilancia con doble verificación y alertas REST en tiempo real.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/YOLO11-Ultralytics-111F68" alt="YOLO11">
+  <img src="https://img.shields.io/badge/Ollama-IA%20local-black?logo=ollama&logoColor=white" alt="Ollama">
+  <img src="https://img.shields.io/badge/FastAPI-REST-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/PyQt5-Dashboard-41CD52?logo=qt&logoColor=white" alt="PyQt5">
+  <img src="https://img.shields.io/badge/tests-31%20passed-2ea44f?logo=pytest&logoColor=white" alt="31 tests">
+  <img src="https://img.shields.io/badge/lint-ruff-261230?logo=ruff&logoColor=white" alt="Ruff">
+</p>
+
+<p align="center">
+  <img src="docs/preview-dashboard.png" alt="Dashboard de la central con alertas en vivo" width="900">
+  <br>
+  <sub>Central C5: alertas en vivo, clientes conectados y gráficas por tipo de incidente y por cámara.</sub>
+</p>
 
 Sistema cliente-servidor que analiza video de vigilancia, **sospecha** posibles
 incidentes con YOLO, los **confirma** con un modelo de visión local (Ollama) y
@@ -8,6 +29,26 @@ prioridad y tiempo estimado de llegada.
 El objetivo es reducir falsos positivos: la alarma solo suena cuando dos
 etapas independientes coinciden. Si la IA local no está disponible, el sistema
 falla de forma segura (**no alarma**) y la detección continúa.
+
+> **Estado:** proyecto de portafolio funcional. Probado en Windows con Python
+> 3.14; requiere Python 3.11 o superior.
+
+## Qué demuestra
+
+- **Diseño de software:** arquitectura hexagonal con puertos y adaptadores, y
+  una regla de dependencia que aísla el dominio de las librerías externas.
+- **Concurrencia en Python:** pipeline con hilos, cola acotada, locks y una
+  interfaz que nunca se bloquea.
+- **Visión por computador:** YOLO + heurísticas para proponer sospechas y un
+  modelo de visión local para confirmarlas.
+- **Backend:** API REST con FastAPI y Pydantic, validación de rangos,
+  autenticación opcional por API key y webhook de despacho.
+- **Escritorio:** dos GUIs desacopladas del negocio (Tkinter para el cliente,
+  PyQt5 para el dashboard).
+- **Calidad:** 31 tests con dobles de prueba, lint con Ruff, configuración por
+  entorno y documentación de arquitectura y API.
+
+## Arquitectura en 30 segundos
 
 ```
 ┌────────────────────── CLIENTE (una cámara) ──────────────────────┐
@@ -45,6 +86,14 @@ falla de forma segura (**no alarma**) y la detección continúa.
 - **API documentada** automáticamente con OpenAPI/Swagger.
 - **Tests** de heurísticas, parser del veredicto, despacho, almacén, registro
   y orquestación del caso de uso.
+
+## Vista del cliente
+
+<p align="center">
+  <img src="docs/preview-client.png" alt="Ventana del cliente detector" width="620">
+  <br>
+  <sub>Una ventana por cámara: video anotado, alarma local y respuesta de la central.</sub>
+</p>
 
 ## Stack
 
