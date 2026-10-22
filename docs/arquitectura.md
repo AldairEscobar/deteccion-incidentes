@@ -37,7 +37,7 @@ cualquier adaptador sin tocar las reglas de negocio.
 |---|---|---|
 | `incidentes/domain` | Entidades inmutables, tipos de incidente y puertos (interfaces). Cero dependencias de terceros. | `FrameAnalysis`, `IncidentEvent`, `VideoReader`, `ViolenceVerifier` |
 | `incidentes/application` | Orquesta el flujo: lee frames, pide sospechas, verifica, genera reporte y alerta. | `DetectIncidentsUseCase` |
-| `incidentes/infrastructure` | Implementa los puertos con tecnología concreta. | `YoloIncidentDetector`, `OllamaViolenceVerifier`, `HttpAlertDispatcher` |
+| `incidentes/infrastructure` | Implementa los puertos con tecnología concreta. | `YoloIncidentDetector`, `OllamaViolenceVerifier`, `HttpAlertDispatcher`, `LiveVideoReader` |
 | `incidentes/presentation` | GUI del cliente (Tkinter) y listener de progreso. | `DetectorView`, `DetectorController` |
 | `incidentes/server` | API REST de la central, modelos Pydantic, despacho, almacén y registro. | `FastAPI`, `AlertStore`, `ClientRegistry` |
 | `incidentes/central` | Dashboard de la central (PyQt5 + matplotlib) y servidor embebido. | `DashboardWindow`, `RestServerThread` |
@@ -71,18 +71,22 @@ Operador          Controller            Caso de uso              Worker IA      
 3. Si hay sospecha y ha pasado el *cooldown*, encola un JPEG para el worker.
 4. El worker verifica con Ollama y, solo si el veredicto es positivo, crea un
    `IncidentEvent`, notifica a la UI y lanza el envío a la central en otro hilo.
-5. Al terminar el video se esperan las verificaciones pendientes, se escribe el
-   reporte JSON y se notifica el resumen.
+5. En modo archivo, al terminar se esperan las verificaciones pendientes, se
+   escribe el video anotado y el reporte JSON, y se notifica el resumen. En
+   modo vivo no hay video ni JSON de sesión: la sesión sigue hasta `stop()` y
+   el resumen se entrega al listener.
 
 ## Concurrencia
 
 | Hilo | Función |
 |---|---|
 | Hilo principal de Tkinter | Widgets y bucle de eventos. Toda actualización pasa por `root.after`. |
-| `detector-worker` | Lee el video y ejecuta la etapa 1. |
+| `detector-worker` | Lee la fuente (archivo o cámara) y ejecuta la etapa 1. |
 | `ai-verifier` | Consume la cola de sospechas y llama a Ollama. |
 | `alert-dispatch` | Envía la alerta a la central sin frenar la verificación. |
-| `client-beacon` | Registro y heartbeats periódicos. |
+| `ticket-watch` | Sondea el ticket hasta que la central lo marca atendido. |
+| `video-watchdog` | Fuerza la reconexión si la cámara deja de entregar frames. |
+| `client-beacon` | Registro y heartbeats periódicos, con el estado de la fuente. |
 | Hilo principal de PyQt5 | Dashboard; sondea `store` y `registry` con `QTimer`. |
 | `central-rest` | uvicorn atiende la API REST. |
 
@@ -91,9 +95,12 @@ Estados compartidos:
 - La cola de verificación está **acotada** (`JOB_QUEUE_SIZE = 2`). Si la IA no
   da abasto, se descarta la sospecha antes que crecer sin límite.
 - `pending` y `alert_sent` se protegen con un `Lock` en el caso de uso.
-- `AlertStore` y `ClientRegistry` usan un `Lock` propio; la GUI solo lee.
+- `LiveVideoReader` oculta las caídas al caso de uso: `read()` solo devuelve
+  `ok=False` tras `stop()`; el estado (`SourceState`) se consulta sin bloquear.
+- `AlertStore` (SQLite) y `ClientRegistry` usan un `Lock` propio; la GUI solo
+  lee. La base guarda el JSON del incidente y la captura JPEG como BLOB.
 - El dashboard **nunca** toca la red desde el hilo de Qt: el servidor corre
-  aparte y el estado se consulta en memoria.
+  aparte y el estado se consulta en la base compartida.
 
 ## Manejo de errores
 
@@ -115,18 +122,24 @@ Estados compartidos:
   no importa OpenCV.
 - **Configuración inmutable y por entorno**: `AppConfig.from_env()` +
   `dataclasses.replace` para los argumentos CLI; no hay estado global mutable.
-- **Central sin persistencia**: el almacén es en memoria a propósito. Cambiar
-  a SQLite/PostgreSQL implica reemplazar `AlertStore`, sin tocar endpoints.
+- **Central con evidencia persistente**: `AlertStore` usa SQLite (WAL + lock)
+  para guardar el JSON de cada incidente y su captura JPEG. El contrato REST no
+  cambia; la imagen se sirve aparte para no duplicarla en cada respuesta.
+  La retención automática queda como trabajo futuro.
 - **Dashboard por sondeo**: `QTimer` lee el estado compartido cada 800 ms. Es
   más simple y seguro que notificar widgets desde el hilo de red.
 - **Puertos con contrato explícito**: `ViolenceVerifier` documenta fail-closed;
   `AlertDispatcher`, fail-open. Los adaptadores cumplen ese contrato.
+- **Reconexión dentro del adaptador**: `LiveVideoReader` reintenta con backoff y
+  watchdog; el caso de uso no distingue una cámara estable de una que se cae.
+- **Cierre de alerta por sondeo**: el cliente consulta el ticket cada 10 s; no
+  hace falta que la central empuje eventos al navegador ni al escritorio.
 
 ## Puntos de extensión
 
 | Necesidad | Dónde cambiar |
 |---|---|
-| Cámara RTSP en vivo | Nuevo `VideoReader` + inyectarlo en `cli/client.py`. |
+| Otra fuente de video | Nuevo adaptador `VideoReader` y registrarlo en `infrastructure/video/sources.py`. El modo vivo actual está en [`monitoreo-tiempo-real.md`](monitoreo-tiempo-real.md). |
 | Modelo propio de violencia | Colocar `violence.pt`; `YoloIncidentDetector` lo detecta. |
 | Otra IA de verificación | Nueva clase que implemente `ViolenceVerifier`. |
 | Persistir alertas | Nueva implementación de `AlertStore` con la misma interfaz. |

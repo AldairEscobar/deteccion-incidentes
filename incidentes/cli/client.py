@@ -29,11 +29,9 @@ from incidentes.infrastructure.verification.ollama_verifier import (
     OllamaViolenceVerifier,
 )
 from incidentes.infrastructure.video.frames import encode_snapshot, mark_pending
-from incidentes.infrastructure.video.opencv_reader import (
-    OpenCVVideoReader,
-    get_video_info,
-)
+from incidentes.infrastructure.video.opencv_reader import get_video_info
 from incidentes.infrastructure.video.opencv_writer import OpenCVVideoWriter
+from incidentes.infrastructure.video.sources import create_reader
 from incidentes.logging_setup import setup_logging
 from incidentes.presentation.detector_controller import DetectorController
 from incidentes.presentation.detector_view import DetectorView
@@ -87,9 +85,14 @@ def _report_service_status(
     dispatcher: HttpAlertDispatcher | None,
     beacon: ClientBeacon | None,
     config: AppConfig,
-) -> None:
-    """Comprueba los servicios externos y arranca los latidos si es posible."""
-    if verifier.ping():
+) -> tuple[bool, bool, bool]:
+    """Comprueba los servicios externos y arranca los latidos si es posible.
+
+    Devuelve ``(ia_disponible, central_habilitada, central_disponible)`` para
+    que la interfaz pinte los badges desde el primer momento.
+    """
+    ai_available = verifier.ping()
+    if ai_available:
         log.info("Ollama OK en %s (modelo %s)", config.ollama_url, config.ollama_model)
     else:
         log.warning(
@@ -101,18 +104,22 @@ def _report_service_status(
 
     if dispatcher is None:
         log.info("alertas a la central deshabilitadas (modo local)")
-        return
+        return ai_available, False, False
 
-    if dispatcher.ping():
+    central_available = dispatcher.ping()
+    # El latido arranca aunque la central esté caída: al volver, el heartbeat
+    # re-registra al cliente y la central recupera la presencia sin reiniciar.
+    if beacon is not None:
+        beacon.start()
+    if central_available:
         log.info("central OK en %s (cliente %s)", config.central_url, config.client_id)
-        if beacon is not None:
-            beacon.start()
     else:
         log.warning(
             "la central no responde en %s. Las alertas locales funcionarán, "
             "pero no se enviarán hasta que esté disponible.",
             config.central_url,
         )
+    return ai_available, True, central_available
 
 
 def build(config: AppConfig) -> tuple[tk.Tk, DetectorController]:
@@ -156,7 +163,7 @@ def build(config: AppConfig) -> tuple[tk.Tk, DetectorController]:
     use_case = DetectIncidentsUseCase(
         suspicion_detector=detector,
         verifier=verifier,
-        reader_factory=OpenCVVideoReader,
+        reader_factory=create_reader,
         writer_factory=lambda: OpenCVVideoWriter(fourcc=config.writer_fourcc),
         info_provider=get_video_info,
         snapshot_encoder=partial(
@@ -168,6 +175,7 @@ def build(config: AppConfig) -> tuple[tk.Tk, DetectorController]:
         drain_timeout_sec=config.verify_drain_timeout_sec,
         alert_dispatcher=dispatcher,
         alert_once=config.alert_once,
+        status_reader=dispatcher,
     )
 
     root = tk.Tk()
@@ -176,18 +184,31 @@ def build(config: AppConfig) -> tuple[tk.Tk, DetectorController]:
         client_id=config.client_id,
         address=config.location_address,
     )
-    controller = DetectorController(
-        view, use_case, output_filename=config.output_filename
-    )
 
     beacon = (
-        ClientBeacon(dispatcher, interval_sec=config.beacon_interval_sec)
+        ClientBeacon(
+            dispatcher,
+            interval_sec=config.beacon_interval_sec,
+            state_provider=lambda: use_case.source_state.name,
+        )
         if dispatcher is not None
         else None
     )
-    _report_service_status(verifier, dispatcher, beacon, config)
+    ai_available, central_enabled, central_available = _report_service_status(
+        verifier, dispatcher, beacon, config
+    )
+
+    controller = DetectorController(
+        view,
+        use_case,
+        output_filename=config.output_filename,
+        ai_available=ai_available,
+        central_enabled=central_enabled,
+        central_available=central_available,
+    )
 
     def on_close() -> None:
+        controller.shutdown()
         if beacon is not None:
             beacon.stop()
         root.destroy()

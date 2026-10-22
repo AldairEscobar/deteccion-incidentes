@@ -47,7 +47,7 @@ class AlertAck(BaseModel):
 
 
 class AlertRecord(BaseModel):
-    """Alerta almacenada en la central, con su plan de despacho."""
+    """Alerta almacenada en la central, con su plan y su evidencia."""
 
     ticket: str
     status: str
@@ -56,6 +56,11 @@ class AlertRecord(BaseModel):
     units: list[str] = Field(default_factory=list)
     received_at: str
     alert: AlertIn
+    # Evidencia: la captura no viaja dentro del JSON para no duplicar el
+    # binario; se sirve aparte desde estos metadatos.
+    has_snapshot: bool = False
+    snapshot_url: str = ""
+    snapshot_sha256: str = ""
 
 
 class StatusUpdate(BaseModel):
@@ -72,12 +77,14 @@ class ClientRegister(BaseModel):
     address: str = ""
     lat: float | None = Field(default=None, ge=-90, le=90)
     lon: float | None = Field(default=None, ge=-180, le=180)
+    source_state: str = ""
 
 
 class HeartbeatIn(BaseModel):
-    """Latido de vida de un cliente."""
+    """Latido de vida de un cliente, con el estado de su fuente de video."""
 
     client_id: str = Field(min_length=1)
+    source_state: str = ""
 
 
 class ClientInfo(BaseModel):
@@ -92,3 +99,4 @@ class ClientInfo(BaseModel):
     connected_at: str = ""
     last_seen: str = ""
     online: bool = True
+    source_state: str = "UNKNOWN"

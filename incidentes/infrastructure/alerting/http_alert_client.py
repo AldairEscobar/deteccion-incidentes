@@ -15,6 +15,7 @@ import contextlib
 import json
 import logging
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 
@@ -73,7 +74,7 @@ class HttpAlertDispatcher(AlertDispatcher):
             return False
 
     # -------------------------------------------------------------- ciclo vida
-    def register(self) -> bool:
+    def register(self, source_state: str = "") -> bool:
         """Da de alta (o refresca) este cliente en la central. Nunca lanza."""
         try:
             self._post_json(
@@ -84,6 +85,7 @@ class HttpAlertDispatcher(AlertDispatcher):
                     "address": self._location.address,
                     "lat": self._location.lat,
                     "lon": self._location.lon,
+                    "source_state": source_state,
                 },
             )
             log.info(
@@ -100,20 +102,44 @@ class HttpAlertDispatcher(AlertDispatcher):
             )
             return False
 
-    def heartbeat(self) -> bool:
+    def heartbeat(self, source_state: str = "") -> bool:
         """Envía un latido. Si la central olvidó al cliente (404), lo re-registra."""
         try:
             self._post_json(
-                "/api/v1/clientes/heartbeat", {"client_id": self._client_id}
+                "/api/v1/clientes/heartbeat",
+                {
+                    "client_id": self._client_id,
+                    "source_state": source_state,
+                },
             )
             return True
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
-                return self.register()
+                return self.register(source_state)
             log.debug("el heartbeat falló (%s)", exc)
             return False
         except Exception:
             return False
+
+    def get_alert_status(self, ticket: str) -> str | None:
+        """Consulta el estado de un ticket; ``None`` si no se pudo leer.
+
+        Lo usa el cliente tras una alerta para volver a verde cuando la central
+        marca la incidencia como atendida.
+        """
+        if not ticket:
+            return None
+        try:
+            path = f"{self._alerts_path}/{urllib.parse.quote(ticket, safe='')}"
+            request = urllib.request.Request(
+                f"{self._base_url}{path}", headers=self._headers()
+            )
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                body = json.loads(response.read().decode())
+            return str(body.get("status", "")) or None
+        except Exception:
+            log.debug("no se pudo consultar el ticket %s", ticket, exc_info=True)
+            return None
 
     def unregister(self) -> bool:
         """Avisa a la central de que este cliente se desconecta. Nunca lanza."""

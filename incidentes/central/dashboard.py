@@ -8,6 +8,7 @@ respetando la regla de Qt de no tocar widgets desde otros hilos.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -17,13 +18,17 @@ matplotlib.use("Qt5Agg")  # debe fijarse antes de importar pyplot
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QColor, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
+    QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QPushButton,
     QTableWidget,
@@ -52,8 +57,27 @@ BUTTON_STOP = (
     "background-color:#C0392B;color:white;font-weight:bold;"
     "padding:6px 14px;border-radius:4px;"
 )
+BUTTON_INFO = (
+    "background-color:#1F6FEB;color:white;font-weight:bold;"
+    "padding:6px 14px;border-radius:4px;"
+)
 
 plt.style.use("dark_background")
+
+# Estado de fuente que reporta el cliente en su heartbeat.
+SOURCE_LABELS = {
+    "LIVE": ("cámara en vivo", "#39ff14"),
+    "CONNECTING": ("conectando", "#ffa64d"),
+    "RECONNECTING": ("reconectando", "#ffa64d"),
+    "NO_SIGNAL": ("SIN SEÑAL", "#ff4d4d"),
+    "STOPPED": ("cámara detenida", "#8b949e"),
+    "UNKNOWN": ("sin fuente", "#8b949e"),
+}
+
+
+def source_display(state: str) -> tuple[str, str]:
+    """Etiqueta y color para el estado de fuente de un cliente."""
+    return SOURCE_LABELS.get(state.upper(), (state.lower() or "desconocida", "#8b949e"))
 
 
 class DashboardWindow(QMainWindow):
@@ -67,7 +91,9 @@ class DashboardWindow(QMainWindow):
         self._start_attempts = 0
         self._seen_tickets: set[str] = set()
         self._seen_clients: set[str] = set()
+        self._client_states: dict[str, str] = {}
         self._client_count = 0
+        self._camera_count = 0
 
         self.setWindowTitle("🚨 CENTRAL DE ALERTAS C5 - Dashboard de Mando")
         self.resize(1280, 720)
@@ -117,11 +143,24 @@ class DashboardWindow(QMainWindow):
 
         left = QVBoxLayout()
         body.addLayout(left, stretch=1)
-        left.addWidget(QLabel("Alertas recibidas"))
+        alerts_header = QHBoxLayout()
+        alerts_header.addWidget(QLabel("Alertas recibidas"))
+        alerts_header.addStretch(1)
+        self.btn_evidence = QPushButton("Ver evidencia")
+        self.btn_evidence.setStyleSheet(BUTTON_INFO)
+        self.btn_evidence.setEnabled(False)
+        self.btn_evidence.clicked.connect(self.show_evidence)
+        alerts_header.addWidget(self.btn_evidence)
+        self.btn_attend = QPushButton("Marcar atendida")
+        self.btn_attend.setStyleSheet(BUTTON_START)
+        self.btn_attend.setEnabled(False)
+        self.btn_attend.clicked.connect(self.attend_selected)
+        alerts_header.addWidget(self.btn_attend)
+        left.addLayout(alerts_header)
 
-        self.table = QTableWidget(0, 5)
+        self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["Ticket", "Cliente", "Tipo", "Descripción", "Hora"]
+            ["Ticket", "Cliente", "Tipo", "Descripción", "Hora", "Estado"]
         )
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -136,6 +175,7 @@ class DashboardWindow(QMainWindow):
             "gridline-color:#30363d;border:1px solid #30363d;}"
             "QTableWidget::item{padding:4px;}"
         )
+        self.table.itemSelectionChanged.connect(self._update_attend_button)
         left.addWidget(self.table, stretch=2)
 
         left.addWidget(QLabel("Consola de eventos"))
@@ -234,20 +274,42 @@ class DashboardWindow(QMainWindow):
     def _refresh_clients(self) -> None:
         clients = registry.list()
         self.client_list.clear()
+        live_cameras = 0
         for client in clients:
-            self.client_list.addItem(
-                f"● {client['client_id']}  ({client['ip']})  "
+            state = str(client.get("source_state") or "UNKNOWN").upper()
+            label, color = source_display(state)
+            if state == "LIVE":
+                live_cameras += 1
+            item = QListWidgetItem(
+                f"● {client['client_id']}  ·  {label}  ·  {client['ip']}  ·  "
                 f"{client['address'] or 'sin dirección'}"
             )
+            item.setForeground(QColor(color))
+            item.setToolTip(
+                f"fuente: {state}\núltimo latido: {client['last_seen']}"
+            )
+            self.client_list.addItem(item)
+
+            previous = self._client_states.get(client["client_id"])
             if client["client_id"] not in self._seen_clients:
                 self._seen_clients.add(client["client_id"])
                 self.append_log(
                     f"[REGISTRO] cliente conectado: {client['client_id']} "
                     f"desde {client['ip']} :: "
-                    f"{client['address'] or 'sin dirección'}"
+                    f"{client['address'] or 'sin dirección'} · cámara {label}"
                 )
+            elif previous is not None and previous != state:
+                self.append_log(
+                    f"[CÁMARA] {client['client_id']}: {previous} → {state}"
+                )
+            self._client_states[client["client_id"]] = state
+
         self._client_count = len(clients)
-        self.lbl_clients.setText(f"Clientes conectados: {self._client_count}")
+        self._camera_count = live_cameras
+        self.lbl_clients.setText(
+            f"Clientes conectados: {self._client_count} · "
+            f"cámaras en vivo: {self._camera_count}"
+        )
 
     def _refresh_alerts(self) -> None:
         alerts = store.list(limit=MAX_VISIBLE_ALERTS)
@@ -258,8 +320,20 @@ class DashboardWindow(QMainWindow):
             self._seen_tickets.add(alert["ticket"])
             self._append_alert(alert)
 
+        # Refresca estados que hayan cambiado por la API o por este panel.
+        for row in range(self.table.rowCount()):
+            ticket_item = self.table.item(row, 0)
+            status_item = self.table.item(row, 5)
+            if ticket_item is None or status_item is None:
+                continue
+            record = store.get(ticket_item.text())
+            if record is not None:
+                status_item.setText(record["status"])
+        self._update_attend_button()
+
         self.lbl_summary.setText(
-            f"Clientes: {self._client_count}   |   Alertas: {store.count()}"
+            f"Clientes: {self._client_count} "
+            f"(cámaras {self._camera_count})   |   Alertas: {store.count()}"
         )
         if new_alerts:
             self._update_charts(alerts)
@@ -277,6 +351,7 @@ class DashboardWindow(QMainWindow):
             body["type"],
             description,
             alert["received_at"][11:19],
+            alert["status"],
         ]
         for column, value in enumerate(values):
             item = QTableWidgetItem(str(value))
@@ -295,6 +370,94 @@ class DashboardWindow(QMainWindow):
             f"    ► AYUDA EN CAMINO: {', '.join(alert['units'])} "
             f"(ETA ~{alert['eta_min']} min)"
         )
+
+    def attend_selected(self) -> None:
+        """Marca el ticket seleccionado como atendido (cierra la alerta)."""
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        ticket_item = self.table.item(row, 0)
+        if ticket_item is None:
+            return
+        ticket = ticket_item.text()
+        record = store.get(ticket)
+        if record is not None and record.get("status") == "atendida":
+            self.append_log(f"[TICKET] {ticket} ya estaba atendida.")
+            return
+        updated = store.update_status(ticket, "atendida")
+        if updated is None:
+            self.append_log(f"[ERROR] no existe el ticket {ticket}.")
+            return
+        status_item = self.table.item(row, 5)
+        if status_item is not None:
+            status_item.setText(updated["status"])
+        self.append_log(
+            f"[TICKET] {ticket} marcada como atendida; "
+            f"el cliente volverá a SIN_ALERTA en el próximo sondeo."
+        )
+        self._update_attend_button()
+
+    def show_evidence(self) -> None:
+        """Muestra la captura y el JSON persistidos del ticket seleccionado."""
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        ticket_item = self.table.item(row, 0)
+        if ticket_item is None:
+            return
+        ticket = ticket_item.text()
+        record = store.get(ticket)
+        if record is None:
+            self.append_log(f"[ERROR] no existe el ticket {ticket}.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Evidencia {ticket}")
+        dialog.resize(860, 720)
+        layout = QVBoxLayout(dialog)
+
+        evidence = store.get_snapshot(ticket)
+        if evidence is not None:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(evidence[0]):
+                image = QLabel()
+                image.setAlignment(Qt.AlignCenter)
+                image.setPixmap(
+                    pixmap.scaled(
+                        760,
+                        420,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    )
+                )
+                layout.addWidget(image)
+            else:
+                layout.addWidget(QLabel("No se pudo decodificar la captura."))
+        else:
+            layout.addWidget(QLabel("Esta alerta no tiene captura adjunta."))
+
+        editor = QTextEdit()
+        editor.setReadOnly(True)
+        editor.setStyleSheet(
+            "QTextEdit{background:#0d1117;color:#e6e6e6;"
+            "font-family:Consolas,monospace;font-size:12px;}"
+        )
+        editor.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
+        layout.addWidget(editor, stretch=1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec_()
+
+    def _update_attend_button(self) -> None:
+        row = self.table.currentRow()
+        self.btn_evidence.setEnabled(row >= 0)
+        enabled = False
+        if row >= 0:
+            status_item = self.table.item(row, 5)
+            enabled = status_item is None or status_item.text() != "atendida"
+        self.btn_attend.setEnabled(enabled)
 
     # --------------------------------------------------------------- gráficas
     def _update_charts(self, alerts: list[dict]) -> None:

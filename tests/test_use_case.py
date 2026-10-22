@@ -122,7 +122,9 @@ class FakeDispatcher(AlertDispatcher):
 class RecorderListener(ProgressListener):
     def __init__(self) -> None:
         self.progress: list[ProcessingProgress] = []
-        self.incidents: list[tuple[Any, float]] = []
+        self.incidents: list[tuple[Any, float, str]] = []
+        self.suspicions: list[Any] = []
+        self.discarded: list[tuple[Any, Any]] = []
         self.completed: list[str] = []
         self.summaries: list[dict] = []
         self.errors: list[str] = []
@@ -130,8 +132,16 @@ class RecorderListener(ProgressListener):
     def on_progress(self, progress: ProcessingProgress, preview_frame: Any) -> None:
         self.progress.append(progress)
 
-    def on_incident_alert(self, incident: Any, timestamp_sec: float) -> None:
-        self.incidents.append((incident, timestamp_sec))
+    def on_suspicion(self, suspicion: Any) -> None:
+        self.suspicions.append(suspicion)
+
+    def on_suspicion_discarded(self, suspicion: Any, verdict: Any) -> None:
+        self.discarded.append((suspicion, verdict))
+
+    def on_incident_alert(
+        self, incident: Any, timestamp_sec: float, timestamp: str = ""
+    ) -> None:
+        self.incidents.append((incident, timestamp_sec, timestamp))
 
     def on_completed(self, output_path: str) -> None:
         self.completed.append(output_path)
@@ -174,7 +184,7 @@ def run_use_case(
     use_case = DetectIncidentsUseCase(
         suspicion_detector=detector,
         verifier=verifier,
-        reader_factory=lambda: reader,
+        reader_factory=lambda _source: reader,
         writer_factory=lambda: writer,
         info_provider=lambda path: VideoInfo(path, len(frames), 10, 640, 480),
         snapshot_encoder=lambda frame: b"jpeg",

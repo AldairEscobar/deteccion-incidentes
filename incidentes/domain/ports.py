@@ -8,12 +8,13 @@ probar sin YOLO, sin cámara y sin red.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Protocol
 
 from incidentes.domain.entities import (
     AlertAck,
     AlertPayload,
     ProcessingProgress,
+    SourceState,
     Suspicion,
     Verdict,
     VideoInfo,
@@ -54,7 +55,17 @@ class ViolenceVerifier(ABC):
 
 
 class VideoReader(ABC):
-    """Puerto de lectura de video."""
+    """Puerto de lectura de video.
+
+    Contrato según la fuente:
+
+    - **Archivo:** ``read`` devuelve ``ok=False`` cuando se agota el video.
+    - **Fuente en vivo:** ``ok=False`` solo debe ocurrir después de ``stop()``;
+      las caídas se reintentan dentro del adaptador y no terminan la sesión.
+
+    ``state`` es informativo para la presentación; el caso de uso no debe
+    depender de él para decidir si continúa.
+    """
 
     @abstractmethod
     def open(self, path: str) -> None:
@@ -62,12 +73,26 @@ class VideoReader(ABC):
 
     @abstractmethod
     def read(self) -> tuple[bool, Any]:
-        """Devuelve ``(ok, frame)``; ``ok=False`` marca el fin del video."""
+        """Devuelve ``(ok, frame)``; ``ok=False`` marca fin o parada."""
         raise NotImplementedError
 
     @abstractmethod
     def close(self) -> None:
         raise NotImplementedError
+
+    @property
+    def state(self) -> SourceState:
+        """Estado actual de la fuente (informativo)."""
+        return SourceState.UNKNOWN
+
+    def stop(self) -> None:
+        """Pide a la fuente que deje de entregar frames.
+
+        La implementación por defecto cierra la captura. Los adaptadores en
+        vivo deben garantizar que un ``read`` pendiente termine en un tiempo
+        acotado (timeout de lectura o watchdog).
+        """
+        self.close()
 
 
 class VideoWriter(ABC):
@@ -107,7 +132,15 @@ class ProgressListener(ABC):
 
     # Hooks opcionales: se dejan con implementación vacía para que un listener
     # que solo necesite progreso no tenga que implementarlos todos.
-    def on_incident_alert(self, incident: Any, timestamp_sec: float) -> None:  # noqa: B027
+    def on_suspicion(self, suspicion: Suspicion) -> None:  # noqa: B027
+        """YOLO propuso una sospecha y se envió a verificar."""
+
+    def on_suspicion_discarded(self, suspicion: Suspicion, verdict: Verdict) -> None:  # noqa: B027
+        """La IA descartó la sospecha; la bitácora puede mostrarlo."""
+
+    def on_incident_alert(  # noqa: B027
+        self, incident: Any, timestamp_sec: float, timestamp: str = ""
+    ) -> None:
         """Se invoca por cada incidente confirmado (respetando el cooldown)."""
 
     def on_summary(self, summary: dict[str, Any]) -> None:  # noqa: B027
@@ -115,6 +148,15 @@ class ProgressListener(ABC):
 
     def on_alert_dispatched(self, ack: AlertAck, incident: Any) -> None:  # noqa: B027
         """La central respondió a una alerta (ticket, ETA, mensaje)."""
+
+    def on_incident_closed(self, incident: Any, ticket: str) -> None:  # noqa: B027
+        """La central marcó el ticket como atendido; la luz puede volver a verde."""
+
+
+class AlertStatusReader(Protocol):
+    """Consulta el estado actual de un ticket en la central."""
+
+    def get_alert_status(self, ticket: str) -> str | None: ...
 
 
 class AlertDispatcher(ABC):
@@ -131,8 +173,10 @@ class AlertDispatcher(ABC):
 
 __all__ = [
     "AlertDispatcher",
+    "AlertStatusReader",
     "IncidentDetector",
     "ProgressListener",
+    "SourceState",
     "VideoInfo",
     "VideoReader",
     "VideoWriter",

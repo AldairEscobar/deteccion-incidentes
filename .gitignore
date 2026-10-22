@@ -39,3 +39,9 @@ resultado_*.mp4
 out*.mp4
 diag_frames/
 *.log
+
+# Base de datos y evidencia de la central.
+data/
+*.db
+*.db-wal
+*.db-shm

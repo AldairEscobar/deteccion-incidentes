@@ -8,7 +8,24 @@ dominio no depende de ninguno de ellos.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
+
+
+class SourceState(StrEnum):
+    """Estado de una fuente de video.
+
+    Un archivo pasa a ``LIVE`` y termina al agotarse. Una fuente en vivo puede
+    alternar entre ``LIVE``, ``NO_SIGNAL`` y ``RECONNECTING`` sin que la sesión
+    termine.
+    """
+
+    UNKNOWN = "desconocido"
+    CONNECTING = "conectando"
+    LIVE = "en_vivo"
+    NO_SIGNAL = "sin_senal"
+    RECONNECTING = "reconectando"
+    STOPPED = "detenido"
 
 
 @dataclass(frozen=True)
@@ -113,6 +130,7 @@ class Suspicion:
     type: str
     label: str
     heuristic_confidence: float = 0.0
+    timestamp: str = ""  # ISO-8601; hora real del frame, no del veredicto
 
 
 @dataclass(frozen=True)
@@ -136,6 +154,7 @@ class IncidentEvent:
     label: str
     verified_by: str = "yolo"
     reason: str = ""
+    timestamp: str = ""  # ISO-8601; se hereda de la sospecha que lo originó
 
 
 @dataclass(frozen=True)

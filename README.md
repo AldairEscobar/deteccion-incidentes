@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Ollama-IA%20local-black?logo=ollama&logoColor=white" alt="Ollama">
   <img src="https://img.shields.io/badge/FastAPI-REST-009688?logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/PyQt5-Dashboard-41CD52?logo=qt&logoColor=white" alt="PyQt5">
-  <img src="https://img.shields.io/badge/tests-31%20passed-2ea44f?logo=pytest&logoColor=white" alt="31 tests">
+  <img src="https://img.shields.io/badge/tests-65%20passed-2ea44f?logo=pytest&logoColor=white" alt="65 tests">
   <img src="https://img.shields.io/badge/lint-ruff-261230?logo=ruff&logoColor=white" alt="Ruff">
 </p>
 
@@ -45,21 +45,21 @@ falla de forma segura (**no alarma**) y la detección continúa.
   autenticación opcional por API key y webhook de despacho.
 - **Escritorio:** dos GUIs desacopladas del negocio (Tkinter para el cliente,
   PyQt5 para el dashboard).
-- **Calidad:** 31 tests con dobles de prueba, lint con Ruff, configuración por
+- **Calidad:** 65 tests con dobles de prueba, lint con Ruff, configuración por
   entorno y documentación de arquitectura y API.
 
 ## Arquitectura en 30 segundos
 
 ```
 ┌────────────────────── CLIENTE (una cámara) ──────────────────────┐
-│  Video MP4 ──▶ YOLO + heurísticas ──▶ sospecha                   │
+│  Cámara IP / MP4 ──▶ YOLO + heurísticas ──▶ sospecha            │
 │                                        │                         │
 │                                        ▼                         │
 │                               Ollama (modelo de visión)          │
 │                                        │ confirmación           │
 │                    alarma local ◀───────┤                         │
-│                    video anotado        ▼                         │
-│                    reporte JSON    POST /api/v1/alertas ─────────┼──┐
+│                    snapshot (evidencia) ▼                         │
+│                    ticket / bitácora   POST /api/v1/alertas ─────┼──┐
 │                    "Ayuda en camino" ◀───────────────────────────┼──┤
 └──────────────────────────────────────────────────────────────────┘  │
                                                                       ▼
@@ -92,13 +92,13 @@ falla de forma segura (**no alarma**) y la detección continúa.
 <p align="center">
   <img src="docs/preview-client.png" alt="Ventana del cliente detector" width="620">
   <br>
-  <sub>Una ventana por cámara: video anotado, alarma local y respuesta de la central.</sub>
+  <sub>Una ventana por cámara: fuente IP o MP4, luz de tres estados y bitácora de sospechas, descartes y confirmaciones.</sub>
 </p>
 
 ## Stack
 
 `Python 3.11+` · `Ultralytics YOLO11` · `OpenCV` · `Ollama` · `FastAPI` ·
-`Pydantic` · `PyQt5` · `Tkinter` · `pytest` · `ruff`
+`Pydantic` · `SQLite` · `PyQt5` · `Tkinter` · `pytest` · `ruff`
 
 ## Estructura del proyecto
 
@@ -117,6 +117,7 @@ falla de forma segura (**no alarma**) y la detección continúa.
 ├── tests/                      # Pruebas unitarias y de orquestación
 ├── docs/
 │   ├── arquitectura.md         # Capas, flujos y decisiones de diseño
+│   ├── monitoreo-tiempo-real.md # Propuesta: cámara IP en monitoreo continuo
 │   └── api.md                  # Contrato REST de la central
 ├── pyproject.toml              # Dependencias, scripts y configuración de tools
 └── .env.example                # Variables de entorno documentadas
@@ -176,9 +177,22 @@ python -m incidentes.cli.central
 python -m incidentes.cli.launch_clients --clients 4
 ```
 
-En cada ventana: **Seleccionar Video MP4 → Iniciar Detección**. Cuando la IA
-confirme violencia, sonará la alarma, se guardará el video anotado y el
-`*_reporte.json`, y la central responderá con el ticket y la ayuda en camino.
+En cada ventana elige la fuente:
+
+- **Cámara IP:** pega la URL MJPEG/RTSP de la app del teléfono y pulsa
+  **Conectar cámara**. El monitoreo sigue hasta pulsar **Detener** o cerrar la
+  ventana; si la cámara se cae, el cliente reintenta solo.
+- **Archivo (demo):** **Seleccionar MP4 → Iniciar demo**. Al terminar se
+  guardan el video anotado y el `*_reporte.json`.
+
+Cuando la IA confirme violencia, sonará la alarma, la luz pasará a rojo y la
+central responderá con el ticket y la ayuda en camino. La bitácora muestra la
+sospecha, el descarte o la confirmación, y la respuesta de la central.
+
+En el dashboard, la lista de clientes indica si la cámara está **en vivo**, sin
+señal o reconectando. Selecciona una alerta y pulsa **Marcar atendida**: el
+cliente lo detecta en su siguiente sondeo, apaga la luz roja y conserva el
+ticket en la bitácora.
 
 También puedes arrancar todo en orden con:
 
@@ -227,23 +241,29 @@ tu gestor de entornos habitual.
 2. **Verificación.** La sospecha se envía a Ollama junto con un JPEG reducido.
    El modelo responde un JSON con `violent`, `type`, `confidence` y `reason`.
    Solo `violent=true` genera un evento.
-3. **Alerta.** El cliente suena la alarma, escribe el video anotado y el
-   reporte JSON, y hace `POST /api/v1/alertas`. La central calcula prioridad,
-   ETA y unidades, responde con un ticket y, opcionalmente, notifica por
-   webhook.
-4. **Presencia.** El cliente se registra y envía latidos periódicos; la central
-   lo marca como desconectado si deja de latir.
+3. **Alerta.** El cliente suena la alarma, envía la alerta con el snapshot y,
+   en modo archivo, escribe el video anotado y el reporte JSON. La central
+   calcula prioridad, ETA y unidades, responde con un ticket y, opcionalmente,
+   notifica por webhook.
+4. **Presencia.** El cliente se registra y envía latidos periódicos con el
+   estado de la cámara; la central lo marca como desconectado si deja de latir.
 
 Detalles de diseño, concurrencia y decisiones en
 [`docs/arquitectura.md`](docs/arquitectura.md).
+
+El monitoreo continuo con cámara IP (sin grabación, con reconexión y cierre de
+ticket) está implementado; decisiones y riesgos en
+[`docs/monitoreo-tiempo-real.md`](docs/monitoreo-tiempo-real.md).
 
 ## API de la central
 
 La API se documenta sola en `http://localhost:8000/docs`. Resumen de
 endpoints, autenticación y ejemplos `curl` en [`docs/api.md`](docs/api.md).
 
-La central **no persiste nada**: las alertas viven en memoria mientras el
-proceso está en marcha. Es un receptor en vivo, no una base de datos.
+La central persiste cada incidente en SQLite (`data/incidentes.db` por defecto,
+configurable con `CENTRAL_DB_PATH`): guarda el **JSON del incidente** y la
+**captura JPEG** de evidencia. En el dashboard, **Ver evidencia** abre ambos sin
+salir de la aplicación. No se graba video continuo.
 
 ## Tests y calidad
 
@@ -264,19 +284,20 @@ para el caso de uso y funciones puras para las heurísticas.
 - **La heurística es deliberadamente conservadora.** Un video con una sola
   persona, poca resolución o mucho movimiento de cámara puede no generar
   sospechas; el diagnóstico ayuda a ajustar los umbrales.
-- **El análisis es sobre video grabado**, no en tiempo real desde una cámara
-  IP. El diseño de puertos permite añadir un `VideoReader` en vivo sin tocar
-  el caso de uso.
-- **La central es efímera** (memoria). Persistir histórico solo requiere otra
-  implementación de `AlertStore`.
+- **La fuente principal es una cámara IP** (MJPEG/RTSP); el modo archivo se
+  conserva como demostración y para generar el video anotado de ejemplo.
+- **La central conserva la evidencia**: un JSON y una captura JPEG por incidente
+  en SQLite. No hay grabación de video ni clips; la retención del histórico aún
+  es manual (ver `docs/api.md`).
 - **La alarma es local al cliente**; el despacho real depende de un webhook
   externo. Sin `DISPATCH_WEBHOOK_URL`, el plan queda registrado en el log y en
   el dashboard.
 
 ## Roadmap
 
-- [ ] Lector de cámara RTSP en vivo.
-- [ ] Persistencia opcional (SQLite/PostgreSQL) del historial de alertas.
+- [x] Lector de cámara RTSP/MJPEG en vivo con reconexión.
+- [x] Persistencia de alertas y capturas en SQLite.
+- [ ] Retención automática y purga de evidencia por antigüedad.
 - [ ] Autenticación por cliente y roles en la central.
 - [ ] Modelo propio de violencia y evaluación con métricas (precisión/recall).
 - [ ] Contenedores Docker para central y cliente.

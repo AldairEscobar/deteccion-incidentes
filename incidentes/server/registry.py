@@ -39,6 +39,7 @@ class ClientRegistry:
             "connected_at": _iso(client["connected_at"]),
             "last_seen": _iso(client["last_seen"]),
             "online": (now - client["last_seen"]) <= self._alive,
+            "source_state": client.get("source_state", "UNKNOWN"),
         }
 
     def register(
@@ -49,6 +50,7 @@ class ClientRegistry:
         lat: float | None = None,
         lon: float | None = None,
         ip: str = "",
+        source_state: str = "",
     ) -> dict:
         """Registra o refresca un cliente y añade la bandera ``nuevo``."""
         now = time.time()
@@ -64,6 +66,8 @@ class ClientRegistry:
                 "ip": ip,
                 "connected_at": previous["connected_at"] if previous else now,
                 "last_seen": now,
+                "source_state": source_state
+                or (previous or {}).get("source_state", "UNKNOWN"),
             }
             record = dict(self._clients[client_id])
 
@@ -71,8 +75,10 @@ class ClientRegistry:
         info["nuevo"] = is_new
         return info
 
-    def heartbeat(self, client_id: str, ip: str = "") -> dict | None:
-        """Refresca el latido; ``None`` si el cliente no está registrado."""
+    def heartbeat(
+        self, client_id: str, ip: str = "", source_state: str = ""
+    ) -> dict | None:
+        """Refresca el latido y el estado de la cámara; ``None`` si no existe."""
         now = time.time()
         with self._lock:
             client = self._clients.get(client_id)
@@ -81,6 +87,8 @@ class ClientRegistry:
             client["last_seen"] = now
             if ip:
                 client["ip"] = ip
+            if source_state:
+                client["source_state"] = source_state
             record = dict(client)
         return self._format(record, now)
 
